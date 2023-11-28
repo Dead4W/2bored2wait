@@ -7,25 +7,16 @@ const notifier = require('node-notifier'); // Required to send desktop notificat
 const webserver = require('./webserver/webserver.js'); // to serve the webserver
 const opn = require('open'); //to open a browser window
 const {
-	Client,
-	discord,
-	Intents,
-	MessageEmbed
-} = require('discord.js');
-const {
 	DateTime
 } = require("luxon");
 const https = require("https");
 const everpolate = require("everpolate");
-const mcproxy = require("@rob9315/mcproxy");
-const antiafk = require("mineflayer-antiafk");
+const mcproxy = require("@icetank/mcproxy");
 const queueData = require("./queue.json");
 const util = require("./util");
-const save = "./saveid";
+
 let config;
-// This dummy var is a workaround to allow binaries
-// const configPath = path.join(process.cwd(), './config/default.json');
-// const data = fs.readFileSync(configPath);
+
 try {
 	config = require("config");
 } catch (err) {
@@ -34,16 +25,15 @@ try {
 		process.exit(1);
 	}
 }
+
 let mc_username;
 let mc_password;
-let updatemessage;
-let discordBotToken;
 let savelogin;
 let accountType;
 let launcherPath;
 let c = 150;
 let finishedQueue = false
-let dc;
+
 const rl = require("readline").createInterface({
 	input: process.stdin,
 	output: process.stdout
@@ -58,13 +48,13 @@ const askForSecrets = async () => {
 	try {
 		localConf = util.readJSON(config_dir + '/local.json');
 	} catch (err) {
-		if (err.code != "ENOENT") throw err;
+		if (err.code !== "ENOENT") throw err;
 	}
 	let canSave = false;
-	if (!(config.has("username") && config.has("mcPassword") && config.has("updatemessage"))) {
+	if (!(config.has("username") && config.has("mcPassword"))) {
 		canSave = true;
 		accountType = ((await promisedQuestion("Account type, mojang (1) or microsoft (2) [1]: ")) === "2" ? "microsoft" : "mojang");
-		if (accountType == "mojang") {
+		if (accountType === "mojang") {
 			mc_username = await promisedQuestion("Email: ");
 			mc_password = await promisedQuestion("Password: ");
 		} else {
@@ -74,15 +64,7 @@ const askForSecrets = async () => {
 		localConf.accountType = accountType;
 		localConf.mcPassword = mc_password;
 		localConf.username = mc_username;
-		updatemessage = await promisedQuestion("Update Messages? Y or N [Y]: ");
-		localConf.updatemessage = updatemessage;
 	}
-	if ((!config.has("discordBot") || config.get("discordBot")) && !config.has("BotToken")) {
-		canSave = true;
-		discordBotToken = await promisedQuestion("BotToken, leave blank if not using discord []: ");
-		localConf.BotToken = discordBotToken;
-	}
-	localConf.discordBot = discordBotToken === "" ? false : config.has("discordBot") && config.get("discordBot");
 
 	if (canSave) {
 
@@ -91,57 +73,27 @@ const askForSecrets = async () => {
 			fs.writeFile(config_dir + '/local.json', JSON.stringify(localConf, null, 2), (err) => {
 				if (err) console.log(err);
 			});
-		};
+		}
 		console.clear();
 	}
-	if (localConf.discordBot) {
-		dc = new Client({
-			intents: [Intents.FLAGS.GUILDS, Intents.FLAGS.GUILD_MESSAGES]
-		});
-		dc.login(discordBotToken ?? config.get('BotToken')).catch(() => {
-			console.warn("There was an error when trying to log in using the provided Discord bot token. If you didn't enter a token this message will go away the next time you run this program!"); //handle wrong tokens gracefully
-		});
-		dc.on('ready', () => {
-			dc.user.setActivity("Queue is stopped.");
-			fs.readFile(save, "utf8", (err, id) => {
-				if (!err) dc.users.fetch(id).then(user => {
-					dcUser = user;
-				});
-			});
-		});
 
-		dc.on('messageCreate', function (message) {
-			if (message.author.username !== dc.user.username) {
-				userInput(message.content, true, message);
-				if (dcUser == null || message.author.id !== dcUser.id) {
-					fs.writeFile(save, message.author.id, function (err) {
-						if (err) {
-							throw err;
-						}
-					});
-				}
-				dcUser = message.author;
-			}
-		});
-	}
 	console.log(`Finished setting up 2b2w. Type "Start" to start the queue. Type "Help" for the list of commands.`);
 	cmdInput();
 	joinOnStart();
 }
 
-if (!config.get("minecraftserver.onlinemode")) cmdInput();
-else {
+if (!config.get("minecraftserver.onlinemode")) {
+	cmdInput();
+} else {
 	mc_username = config.username;
 	mc_password = config.mcPassword;
 	launcherPath = config.profilesFolder;
 	accountType = config.get("accountType");
-	discordBotToken = config.BotToken
 	askForSecrets();
 }
 
 let stoppedByPlayer = false;
 let timedStart;
-let dcUser; // discord user that controls the bot
 let starttimestring;
 let options;
 let doing;
@@ -162,17 +114,12 @@ let proxyClient; // a reference to the client that is the actual minecraft game
 let client; // the client to connect to 2b2t
 let server; // the minecraft server to pass packets
 let conn; // connection object from mcproxy for the client variable
+let proxyPackets = [];
 
 options = {
 	host: config.get("minecraftserver.hostname"),
 	port: config.get("minecraftserver.port"),
 	version: config.get("minecraftserver.version")
-}
-
-function startAntiAntiAFK() {
-	if (!config.has("antiAntiAFK.enabled") || !config.get("antiAntiAFK.enabled")) return;
-	if (proxyClient != null || !webserver.isInQueue || !finishedQueue) return;
-	conn.bot.afk.start();
 }
 
 function cmdInput() {
@@ -212,9 +159,7 @@ function startQueuing() {
 		options.username = config.get("minecraftserver.username");
 	}
 	conn = new mcproxy.Conn(options); // connect to 2b2t
-	client = conn.bot._client;
-	conn.bot.loadPlugin(antiafk);
-	conn.bot.afk.setOptions(config.get("antiAntiAFK").get("config"));
+	client = conn.stateData.bot._client;
 	join();
 }
 
@@ -227,48 +172,55 @@ function join() {
     const threshold = config.get("desktopNotifications.threshold");
 	doing = "queue"
 	webserver.isInQueue = true;
-	startAntiAntiAFK(); //for non-2b2t servers
-	activity("Starting the queue...");
+
+	proxyPackets = [];
+
 	client.on("packet", (data, meta) => { // each time 2b2t sends a packet
+		if (!['encryption_begin', 'compress', 'success', ''].includes(meta.name) && proxyPackets.length < 50) {
+			proxyPackets.push([
+				meta.name,
+				data,
+			]);
+		}
+
 		switch (meta.name) {
 			case "playerlist_header":
-				if (!finishedQueue && true) { // if the packet contains the player list, we can use it to see our place in the queue
-					let messageheader = data.header;
-					let positioninqueue = "None";
+				if (!finishedQueue) { // if the packet contains the player list, we can use it to see our place in the queue
+					let message_header = JSON.parse(data.header);
+					let position_in_queue = "None";
+
 					try {
-						positioninqueue = messageheader.split("ue")[2].split("\\")[0].slice(9);
+						for (let line of message_header['extra']) {
+							if (line.text.match(/position in queue/ui)) {
+								position_in_queue = Number(line['extra'][0]['text']);
+							}
+						}
 					} catch (e) {
 						if (e instanceof TypeError && (positionError !== true)) {
 							console.log("Reading position in queue from tab failed! Is the queue empty, or the server isn't 2b2t?");
 							positionError = true;
 						}
 					}
-					if (positioninqueue !== "None") positioninqueue = Number(positioninqueue);
-					webserver.queuePlace = positioninqueue; // update info on the web page
-					if (lastQueuePlace === "None" && positioninqueue !== "None") {
-						queueStartPlace = positioninqueue;
+
+					webserver.queuePlace = position_in_queue; // update info on the web page
+
+					if (lastQueuePlace === "None" && position_in_queue !== "None") {
+						console.log(`Position in queue: ${position_in_queue}`);
+
+						queueStartPlace = position_in_queue;
 						queueStartTime = DateTime.local();
 					}
-					if (positioninqueue !== "None" && lastQueuePlace !== positioninqueue) {
+
+					if (position_in_queue !== "None" && lastQueuePlace !== position_in_queue) {
 						let totalWaitTime = getWaitTime(queueStartPlace, 0);
-						let timepassed = getWaitTime(queueStartPlace, positioninqueue);
+						let timepassed = getWaitTime(queueStartPlace, position_in_queue);
 						let ETAmin = (totalWaitTime - timepassed) / 60;
 						server.favicon = config.has("favicon") ? config.get("favicon") : fs.readFileSync("favicon.png").toString("base64");
 						server.motd = `Place in queue: ${webserver.queuePlace} ETA: ${webserver.ETA}`; // set the MOTD because why not
 						webserver.ETA = Math.floor(ETAmin / 60) + "h " + Math.floor(ETAmin % 60) + "m";
 						webserver.finTime = new Date((new Date()).getTime() + ETAmin * 60000);
-						if (config.get("userStatus")) {
-							//set the Discord Activity
-							const name = displayEmail?options.username:client.username;
-							logActivity("P: " + positioninqueue + " E: " + webserver.ETA + " - " + name);
-						} else {
-							logActivity("P: " + positioninqueue + " E: " + webserver.ETA);
-						}
-						if (config.get("notification.enabled") && positioninqueue <= config.get("notification.queuePlace") && !notisend && config.discordBot && dcUser != null) {
-							sendDiscordMsg(dcUser, "Queue", "The queue is almost finished. You are in Position: " + webserver.queuePlace);
-							notisend = true;
-						}
-						if (positioninqueue <= threshold && notificationsEnabled){
+
+						if (position_in_queue <= threshold && notificationsEnabled){
 						notifier.notify({// Send the notification
                             title: 'Your queue is ' + threshold + '!',
                             message: 'Your queue is ' + threshold + '!',
@@ -276,20 +228,21 @@ function join() {
 							wait: true});
 							notificationsEnabled = false};// The flag is set to false to prevent the notification from being shown again
 					}
-					lastQueuePlace = positioninqueue;
+					lastQueuePlace = position_in_queue;
 				}
 				break;
 			case "chat":
 				if (finishedQueue === false) { // we can know if we're about to finish the queue by reading the chat message
 					// we need to know if we finished the queue otherwise we crash when we're done, because the queue info is no longer in packets the server sends us.
 					let chatMessage = JSON.parse(data.message).text;
-					if (chatMessage == 'Queued for server main.' || chatMessage == 'You are already queued to server main.')
-					console.log("2B2T says: " + chatMessage);
-					if (chatMessage == "Connected to the server.") {
+					if (chatMessage === 'Queued for server main.' || chatMessage === 'You are already queued to server main.') {
+						console.log("2B2T says: " + chatMessage);
+					}
+					if (chatMessage === "Connected to the server.") {
 						if (config.get("expandQueueData")) {
 							queueData.place.push(queueStartPlace);
 							let timeQueueTook = DateTime.local().toSeconds() - queueStartTime.toSeconds();
-							let b = Math.pow((0 + c) / (queueStartPlace + c), 1 / timeQueueTook);
+							let b = Math.pow(c / (queueStartPlace + c), 1 / timeQueueTook);
 							queueData.factor.push(b);
 							fs.writeFile("queue.json", JSON.stringify(queueData), "utf-8", (err) => {
 								log(err);
@@ -300,10 +253,8 @@ function join() {
 							reconnect();
 						} else {
 							finishedQueue = true;
-							startAntiAntiAFK();
 							webserver.queuePlace = "FINISHED";
 							webserver.ETA = "NOW";
-							logActivity("Queue is finished");
 						}
 					}
 				}
@@ -346,13 +297,25 @@ function join() {
 		});
 		newProxyClient.on("end", () => {
 			proxyClient = null;
-			startAntiAntiAFK();
 		})
-		conn.bot.afk.stop().then(() => {
-			conn.sendPackets(newProxyClient);
-			conn.link(newProxyClient);
-			proxyClient = newProxyClient;
-		});
+
+		for (let packet of proxyPackets) {
+			let packetName = packet[0];
+			let packetParams = packet[1];
+
+			if (isSendablePacket(packetName)) {
+				continue;
+			}
+
+			if ('entityId' in packetParams) {
+				packetParams['entityId'] = conn.stateData.bot.entity.id;
+			}
+
+			newProxyClient.write(packetName, packetParams);
+		}
+
+		conn.link(newProxyClient);
+		proxyClient = newProxyClient;
 	});
 }
 
@@ -375,7 +338,6 @@ function reconnect() {
 	doing = "reconnect";
 	if (stoppedByPlayer) stoppedByPlayer = false;
 	else {
-		logActivity("Reconnecting... ");
 		reconnectLoop();
 	}
 }
@@ -393,16 +355,17 @@ function reconnectLoop() {
 //function to filter out some packets that would make us disconnect otherwise.
 //this is where you could filter out packets with sign data to prevent chunk bans.
 function filterPacketAndSend(data, meta, dest) {
-	if (meta.name !== "keep_alive" && meta.name !== "update_time") { //keep alive packets are handled by the client we created, so if we were to forward them, the minecraft client would respond too and the server would kick us for responding twice.
+	if (isSendablePacket(meta.name)) {
 		dest.writeRaw(data);
 	}
 }
 
-function activity(string) {
-	dc?.user?.setActivity(string);
+function isSendablePacket(name) {
+	// keep alive packets are handled by the client we created, so if we were to forward them, the minecraft client would respond too and the server would kick us for responding twice.
+	return name !== "keep_alive"
+		&& name !== "update_time"
+		&& name !== 'custom_payload'; // some can error
 }
-
-//the discordBot part starts here.
 
 function userInput(cmd, DiscordOrigin, discordMsg) {
 	// this makes no sense, some commands reply to discord bot some log to console?
@@ -424,18 +387,18 @@ function userInput(cmd, DiscordOrigin, discordMsg) {
 			break;
 		case "stats":
 			try {
-			if (conn.bot.health == undefined && conn.bot.food == undefined){
-			console.log("Unknown.")
-			break;}
-			else
-			{if (conn.bot.health == 0)
-			console.log("Health: DEAD");
-			else
-			console.log("Health: " + Math.ceil(conn.bot.health)/2 + "/10");
-			if (conn.bot.food == 0)
-			console.log("Hunger: STARVING");
-			else
-			console.log("Hunger: " + conn.bot.food/2 + "/10");}
+				if (conn.bot.health == undefined && conn.bot.food == undefined){
+					console.log("Unknown.")
+					break;}
+				else
+				{if (conn.bot.health == 0)
+					console.log("Health: DEAD");
+				else
+					console.log("Health: " + Math.ceil(conn.bot.health)/2 + "/10");
+					if (conn.bot.food == 0)
+						console.log("Hunger: STARVING");
+					else
+						console.log("Hunger: " + conn.bot.food/2 + "/10");}
 			} catch (err)
 			{console.log(`Start 2B2W first with "Start".`)}
 			break;
@@ -483,7 +446,8 @@ function userInput(cmd, DiscordOrigin, discordMsg) {
 			switch (doing) {
 				case "queue":
 					msg(DiscordOrigin, discordMsg, "Reconnecting", `Position: ${webserver.queuePlace} \n Estimated time until login: ${webserver.ETA}`);
-					console.log("Position: " + webserver.queuePlace + "  Estimated time until login: " + webserver.ETA);
+					console.log(`Position: ${webserver.queuePlace} Estimated time until login: ${webserver.ETA}`);
+					console.log(`Debug proxy packets length: ${proxyPackets.length}`);
 					break;
 				case "timedStart":
 					msg(DiscordOrigin, discordMsg, "Timer", "Timer is set to " + starttimestring);
@@ -528,50 +492,24 @@ function userInput(cmd, DiscordOrigin, discordMsg) {
 			if (/start (\d|[0-1]\d|2[0-3]):[0-5]\d$/.test(cmd)) {
 				doing = "timedStart"
 				timedStart = setTimeout(startQueuing, timeStringtoDateTime(cmd).toMillis() - DateTime.local().toMillis());
-				activity("Starting at " + starttimestring);
+
 				msg(DiscordOrigin, discordMsg, "Timer", "Queue is starting at " + starttimestring);
 			} else if (/^play (\d|[0-1]\d|2[0-3]):[0-5]\d$/.test(cmd)) {
 				timeStringtoDateTime(cmd);
 				calcTime(cmd);
 				msg(DiscordOrigin, discordMsg, "Time calculator", "The perfect time to start the queue will be calculated, so you can play at " + starttimestring);
-				activity("You can play at " + starttimestring);
+
 			} else msg(DiscordOrigin, discordMsg, "Error", `Unknown command. Type "Help" for the list of commands.`);
 	}
 }
 
 function stopMsg(discordOrigin, discordMsg, stoppedThing) {
 	msg(discordOrigin, discordMsg, stoppedThing, stoppedThing + " is **stopped**");
-	activity(stoppedThing + " is stopped.");
 }
 
 function msg(discordOrigin, msg, title, content) {
 	if (discordOrigin) sendDiscordMsg(msg.channel, title, content);
 	else console.log(content);
-}
-
-function sendDiscordMsg(channel, title, content) {
-	const MessageEmbed = {
-		color: 3447003,
-		author: {
-			name: dc.user.username,
-			icon_url: dc.user.avatarURL
-		},
-		fields: [{
-			name: title,
-			value: content
-		}],
-		timestamp: new Date(),
-		footer: {
-			icon_url: dc.user.avatarURL,
-			text: "Author: MrGeorgen"
-		}
-	}
-	if (config.get("dc_chat")) {
-	channel.send({
-		embeds: [MessageEmbed]
-	}).catch(() => {
-		console.warn(`There was a permission error! Please make sure your bot has perms to talk.`); //handle wrong tokens gracefully
-	})};
 }
 
 function timeStringtoDateTime(time) {
@@ -625,11 +563,6 @@ function stopQueing() {
 	stop();
 }
 
-function logActivity(update) {
-	activity(update);
-	log(update);
-}
-
 function joinOnStart() {
 	if (config.get("joinOnStart")) setTimeout(startQueuing, 1000);
 }
@@ -641,15 +574,14 @@ function getWaitTime(queueLength, queuePos) {
 process.on('uncaughtException', err => {
 	const boxen = require("boxen")
 	console.error(err);
-	console.log(boxen(`Something went wrong! Feel free to contact us on discord or github! \n\n Github: https://github.com/themoonisacheese/2bored2wait \n\n Discord: https://discord.next-gen.dev/`, {title: 'Something Is Wrong', titleAlignment: 'center', padding: 1, margin: 1, borderStyle: 'bold', borderColor: 'red', backgroundColor: 'red', align: 'center'}));	
+	console.log(boxen(`Something went wrong! Feel free to contact us on discord or github! \n\n Github: https://github.com/themoonisacheese/2bored2wait \n\n Discord: https://discord.next-gen.dev/`, {title: 'Something Is Wrong', titleAlignment: 'center', padding: 1, margin: 1, borderStyle: 'bold', borderColor: 'red', backgroundColor: 'red', align: 'center'}));
 	console.log('Press any key to exit');
 	process.stdin.setRawMode(true);
 	process.stdin.resume();
 	process.stdin.on('data', process.exit.bind(process, 0));
 });
-  
+
 module.exports = {
 	startQueue: startQueuing,
-	filterPacketAndSend: filterPacketAndSend,
 	stop: stopQueing,
 };

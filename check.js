@@ -10,10 +10,6 @@ const rl = readline.createInterface({
 // constants
 const conVer = "1.0.0"
 
-const UPDATE_PROMPT = `To ignore press enter.
-To clear your settings type 'settings'.
-To open the release in browser, type 'show'.
-> `;
 const DEFAULT_CONFIG = `{
     "version": "${conVer}",
     "accountType": "mojang", // set this to microsoft if you want to use a microsoft account
@@ -90,57 +86,8 @@ if (process.env["NODE_CONFIG_DIR"] ?? "" == "") {
 
 let config = require('config');
 
-if (config.updatemessage === false || config.updatemessage == "n") {
-    start();
-    process.exit(0);
-}
-
 (async () => {
-    const fetch = require('node-fetch');
-    let latest = await fetch('https://api.github.com/repos/themoonisacheese/2bored2wait/releases/latest');
-
-    let { tag_name, html_url, body } = JSON.parse(await latest.text());
-
-    if (`v${require("./package.json").version}` == tag_name) {
-        start();
-        return;
-    }
-    let update_message = newUpdateMessage(tag_name, body);
-
-    question();
-
-    function question() {
-        console.log(update_message);
-        rl.question(UPDATE_PROMPT, choiceHandler);
-    }
-
-    function choiceHandler(choice) {
-        switch (choice.toLowerCase()) {
-            case '':
-                start();
-                break;
-            case 'settings':
-                console.log("Clearing Settings");
-                const config_dir = process.env["NODE_CONFIG_DIR"];
-                const path = require('path');
-                for (const file of fs.readdirSync(config_dir)) {// require was missing fuck
-                    const full_path = path.join(config_dir, file);
-                    fs.renameSync(full_path, `${full_path}.bak`);
-                }
-                fs.writeFileSync(path.join(config_dir, "local.json"), DEFAULT_CONFIG);
-                process.exit(0);
-            case 'dl':
-            case 'download':
-            case 'show':
-                require('open')(html_url);
-                console.log(html_url)
-                process.exit(0);
-            default:
-                console.log("Invalid response.");
-                question();
-                break;
-        }
-    };
+    start();
 })()
 
 // functions
@@ -174,20 +121,3 @@ function start() {
         })
     }
 }
-
-
-function newUpdateMessage(tag, body) {
-    return require('boxen')(`New Update Available! → ${tag}
- 
-Changes:
-${body}
-
-Change Log: https://github.com/themoonisacheese/2bored2wait/compare/v${require("./package.json").version}...${tag}`, {
-        padding: 1,
-        margin: 2,
-        align: 'center',
-        borderColor: 'red',
-        float: 'center',
-        borderStyle: 'round'
-    })
-};
